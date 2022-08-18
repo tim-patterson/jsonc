@@ -3,7 +3,6 @@ use std::time::Instant;
 use jsonc::columnar::{ColumnData, PathComponent, Stripe};
 use jsonc::datum::Datum;
 use jsonc::loader::load_json;
-use jsonc::row_expr::avg_using_row_expr;
 
 fn main() -> Result<(), Box<dyn Error>> {
     // https://datasets-documentation.s3.eu-west-3.amazonaws.com/kafka/github_all_columns.ndjson
@@ -11,7 +10,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let start = Instant::now();
     let data = load_json("github_all_columns.ndjson")?;
     let duration = start.elapsed();
-    println!("Loaded data in {duration:?}");
+    println!("Loaded {} rows of data in {duration:?}", data.len());
 
     println!("Converting to columnar");
     let start = Instant::now();
@@ -23,8 +22,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Columnarised data in {duration:?}");
 
     perf_test(average_review_comments_hand_rolled_row, "hand rolled row", &data);
-    perf_test(avg_using_row_expr, "row expr", &data);
     perf_test(average_review_comments_hand_rolled_column, "hand rolled columnar", &columnar);
+    //println!("{columnar:?}");
     Ok(())
 }
 
@@ -60,9 +59,11 @@ fn average_review_comments_hand_rolled_column(stripe: &Stripe) -> f64 {
     let path = vec![PathComponent::Key("review_comments".to_string())];
     if let Some(column) = stripe.get_column(&path) {
         if let ColumnData::Float(vec) = &column.data {
-            for number in vec {
-                sum += *number;
-                count += 1;
+            for (idx, number) in vec.iter().enumerate() {
+                if !column.null_map[idx] {
+                    sum += *number;
+                    count += 1;
+                }
             }
         }
     }

@@ -9,10 +9,15 @@ pub fn load_json<P: AsRef<Path>>(f: P) -> Result<Vec<Datum>,Box<dyn Error>> {
     let reader = BufReader::new(File::open(f)?);
     let mut results = Vec::new();
 
-    let mut lines = reader.lines();
-    while let Some(line) = lines.next() {
+    //let mut c =0;
+
+    for line in reader.lines() {
         let value: Value = serde_json::from_str(&line?)?;
         results.push(convert_from_value(value));
+        // c += 1;
+        // if c > 100 {
+        //     break;
+        // }
     }
 
     Ok(results)
