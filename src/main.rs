@@ -2,6 +2,8 @@ use jsonc::columnar::{ColumnData, PathComponent, Stripe};
 use jsonc::datum::Datum;
 use jsonc::loader::load_json;
 use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
 use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -21,6 +23,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let duration = start.elapsed();
     println!("Columnarised data in {duration:?}");
 
+    {
+        let writer = BufWriter::new(File::create("json.columns")?);
+        bincode::serialize_into(writer, &columnar)?;
+    }
+    println!("Loading columar data");
+    let start = Instant::now();
+    {
+        let reader = BufReader::new(File::open("json.columns")?);
+        columnar = bincode::deserialize_from(reader)?;
+    }
+    let duration = start.elapsed();
+    println!("Loaded data in {duration:?}");
+
     perf_test(
         average_review_comments_hand_rolled_row,
         "hand rolled row",
@@ -37,7 +52,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn perf_test<T: ?Sized>(f: fn(&T) -> f64, label: &str, data: &T) {
     println!("Calculating average review comments using {label}");
-    for _ in 0..10 {
+    for _ in 0..20 {
         let start = Instant::now();
         let avg = f(data);
         let duration = start.elapsed();

@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+/// Loads data from a file into a vec of datum's, used for testing.
 pub fn load_json<P: AsRef<Path>>(f: P) -> Result<Vec<Datum>, Box<dyn Error>> {
     let reader = BufReader::new(File::open(f)?);
     let mut results = Vec::new();
@@ -23,6 +24,7 @@ pub fn load_json<P: AsRef<Path>>(f: P) -> Result<Vec<Datum>, Box<dyn Error>> {
     Ok(results)
 }
 
+/// Converts from serde value into our datum format
 fn convert_from_value(val: Value) -> Datum {
     match val {
         Value::String(s) => Datum::String(s),

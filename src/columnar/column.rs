@@ -1,10 +1,11 @@
-use crate::datum::{Datum, Type};
+use crate::datum::{Datum, InternalType};
 use bit_vec::BitVec;
+use serde::{Serialize, Deserialize};
 
 /// Represents the data at a given path
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Column {
-    indexes: Vec<Vec<u16>>,
+    indexes: Vec<Vec<u32>>,
     pub data: ColumnData,
     pub null_map: BitVec,
 }
@@ -19,9 +20,9 @@ impl Column {
     }
 
     pub(super) fn add_datum(&mut self, datum: &Datum, indexes: &[usize]) {
-        self.up_cast(datum.type_of());
+        self.up_cast(datum.internal_type());
         for (index, index_buf) in indexes.iter().zip(self.indexes.iter_mut()) {
-            index_buf.push(*index as u16);
+            index_buf.push(*index as u32);
         }
         self.null_map.push(datum.is_null());
         match (&mut self.data, datum) {
@@ -69,54 +70,54 @@ impl Column {
     }
 
     /// Up-casts the columnData to be of the type needed to accept the passed in datum
-    fn up_cast(&mut self, data_type: Type) {
+    fn up_cast(&mut self, data_type: InternalType) {
         match (&self.data, data_type) {
             // Null data or union columns are like wildcards.
-            (_, Type::Missing) | (_, Type::Null) | (ColumnData::Union(_), _) => {}
+            (_, InternalType::Missing) | (_, InternalType::Null) | (ColumnData::Union(_), _) => {}
             // Column type matches, we're ok
-            (ColumnData::Float(_), Type::Float)
-            | (ColumnData::TinyInt(_), Type::TinyInt)
-            | (ColumnData::SmallInt(_), Type::SmallInt)
-            | (ColumnData::Array(_), Type::Array)
-            | (ColumnData::String(_, _), Type::String)
-            | (ColumnData::Object(_), Type::Object)
-            | (ColumnData::Bool(_), Type::Bool) => {}
+            (ColumnData::Float(_), InternalType::Float)
+            | (ColumnData::TinyInt(_), InternalType::TinyInt)
+            | (ColumnData::SmallInt(_), InternalType::SmallInt)
+            | (ColumnData::Array(_), InternalType::Array)
+            | (ColumnData::String(_, _), InternalType::String)
+            | (ColumnData::Object(_), InternalType::Object)
+            | (ColumnData::Bool(_), InternalType::Bool) => {}
             // Compatible columns
-            (ColumnData::SmallInt(_), Type::TinyInt)
-            | (ColumnData::Float(_), Type::TinyInt)
-            | (ColumnData::Float(_), Type::SmallInt) => {}
+            (ColumnData::SmallInt(_), InternalType::TinyInt)
+            | (ColumnData::Float(_), InternalType::TinyInt)
+            | (ColumnData::Float(_), InternalType::SmallInt) => {}
             // Column type is null, just upcast, padding with default values
-            (ColumnData::Null, Type::Bool) => {
+            (ColumnData::Null, InternalType::Bool) => {
                 let mut vec = BitVec::new();
                 vec.grow(self.null_map.len(), false);
                 self.data = ColumnData::Bool(vec);
             }
-            (ColumnData::Null, Type::TinyInt) => {
+            (ColumnData::Null, InternalType::TinyInt) => {
                 self.data = ColumnData::TinyInt(vec![0; self.null_map.len()]);
             }
-            (ColumnData::Null, Type::SmallInt) => {
+            (ColumnData::Null, InternalType::SmallInt) => {
                 self.data = ColumnData::SmallInt(vec![0; self.null_map.len()]);
             }
-            (ColumnData::Null, Type::Float) => {
+            (ColumnData::Null, InternalType::Float) => {
                 self.data = ColumnData::Float(vec![0.0; self.null_map.len()]);
             }
-            (ColumnData::Null, Type::Object) => {
+            (ColumnData::Null, InternalType::Object) => {
                 self.data = ColumnData::Object(vec![0; self.null_map.len()]);
             }
-            (ColumnData::Null, Type::Array) => {
+            (ColumnData::Null, InternalType::Array) => {
                 self.data = ColumnData::Array(vec![0; self.null_map.len()]);
             }
-            (ColumnData::Null, Type::String) => {
+            (ColumnData::Null, InternalType::String) => {
                 self.data = ColumnData::String(String::new(), vec![0; self.null_map.len()]);
             }
             // Special cases to upcast numeric types
-            (ColumnData::TinyInt(vec), Type::SmallInt) => {
+            (ColumnData::TinyInt(vec), InternalType::SmallInt) => {
                 self.data = ColumnData::SmallInt(vec.iter().map(|i| *i as i16).collect())
             }
-            (ColumnData::TinyInt(vec), Type::Float) => {
+            (ColumnData::TinyInt(vec), InternalType::Float) => {
                 self.data = ColumnData::Float(vec.iter().map(|i| *i as f64).collect())
             }
-            (ColumnData::SmallInt(vec), Type::Float) => {
+            (ColumnData::SmallInt(vec), InternalType::Float) => {
                 self.data = ColumnData::Float(vec.iter().map(|i| *i as f64).collect())
             }
 
@@ -129,7 +130,7 @@ impl Column {
 }
 
 /// The actual data inside one column
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum ColumnData {
     Null, // If the whole column is null and untyped.
     TinyInt(Vec<i8>),
@@ -147,23 +148,23 @@ impl ColumnData {
         matches!(self, ColumnData::Null)
     }
 
-    pub fn type_for(&self) -> Type {
+    pub(crate) fn type_for(&self) -> InternalType {
         match self {
-            ColumnData::Null => Type::Null,
-            ColumnData::TinyInt(_) => Type::TinyInt,
-            ColumnData::SmallInt(_) => Type::SmallInt,
-            ColumnData::Float(_) => Type::Float,
-            ColumnData::Bool(_) => Type::Bool,
-            ColumnData::String(_, _) => Type::String,
-            ColumnData::Object(_) => Type::Object,
-            ColumnData::Array(_) => Type::Array,
-            ColumnData::Union(_) => Type::Union,
+            ColumnData::Null => InternalType::Null,
+            ColumnData::TinyInt(_) => InternalType::TinyInt,
+            ColumnData::SmallInt(_) => InternalType::SmallInt,
+            ColumnData::Float(_) => InternalType::Float,
+            ColumnData::Bool(_) => InternalType::Bool,
+            ColumnData::String(_, _) => InternalType::String,
+            ColumnData::Object(_) => InternalType::Object,
+            ColumnData::Array(_) => InternalType::Array,
+            ColumnData::Union(_) => InternalType::Union,
         }
     }
 }
 
 /// Very similar to a datum but Arrays and Objects only contain some metadata here.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Union {
     Null,
     Float(f64),
