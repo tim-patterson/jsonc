@@ -1,7 +1,8 @@
-use std::collections::{BTreeMap};
-use bit_vec::BitVec;
-use crate::datum::{Datum, Type};
-
+mod column;
+use crate::columnar::column::Column;
+pub use crate::columnar::column::ColumnData;
+use crate::datum::Datum;
+use std::collections::BTreeMap;
 // ie for {a: 8}, {a: 9}, {}, {a: null}
 // offset0 [1,2,2,3]
 // data    [8,9,0]
@@ -36,7 +37,6 @@ use crate::datum::{Datum, Type};
 // foo.[] -> object{offsets=[[0,1]], nulls=[t], size=[1]}
 // foo.[].bar -> number{offsets=[[0,1]], nulls=[f], vals=[5]}
 
-
 // Ideas:
 // * Does it make sense to store arrow like offsets or are we better just storing indexes?
 //   point lookups would require binary searches but scans is what we want to be good at anyway.
@@ -50,8 +50,6 @@ use crate::datum::{Datum, Type};
 //   advantages: no bloat for required fields nor rare fields. special paths in code could take
 //   advantage of common cases
 
-
-
 /// A path to a json node
 pub type Path = Vec<PathComponent>;
 
@@ -60,7 +58,7 @@ pub type Path = Vec<PathComponent>;
 #[derive(Debug, Eq, PartialEq, Clone, Ord, PartialOrd)]
 pub enum PathComponent {
     Key(String),
-    Array
+    Array,
 }
 
 /// A chunk of data that's been serialized in one go.
@@ -68,14 +66,14 @@ pub enum PathComponent {
 #[derive(Debug)]
 pub struct Stripe {
     columns: BTreeMap<Path, Column>,
-    count: usize
+    count: usize,
 }
 
 impl Stripe {
     pub fn new() -> Self {
         Stripe {
             columns: BTreeMap::new(),
-            count: 0
+            count: 0,
         }
     }
 
@@ -94,7 +92,8 @@ impl Stripe {
             return;
         }
         if !self.columns.contains_key(path) {
-            self.columns.insert(path.to_vec(), Column::new(indexes.len()));
+            self.columns
+                .insert(path.to_vec(), Column::new(indexes.len()));
         }
         let column = self.columns.get_mut(path).unwrap();
         column.add_datum(datum, indexes);
@@ -124,128 +123,4 @@ impl Stripe {
             _ => {}
         }
     }
-}
-
-/// Represents the data at a given path
-#[derive(Debug)]
-pub struct Column {
-    indexes: Vec<Vec<u16>>,
-    pub data: ColumnData,
-    pub null_map: BitVec
-}
-
-impl Column {
-    fn new(depth: usize) -> Self {
-        Column {
-            indexes: vec![Vec::new(); depth],
-            data: ColumnData::Null,
-            null_map: BitVec::new()
-        }
-    }
-
-    fn add_datum(&mut self, datum: &Datum, indexes: &[usize]) {
-        self.up_cast(datum.type_of());
-        for (index, index_buf) in indexes.iter().zip(self.indexes.iter_mut()) {
-            index_buf.push(*index as u16);
-        }
-        self.null_map.push(datum.is_null());
-        match (&mut self.data, datum) {
-            (ColumnData::Null, Datum::Null) => {},
-            (ColumnData::Null, _) => unreachable!(),
-            (ColumnData::Bool(vec), Datum::Bool(b)) => vec.push(*b),
-            (ColumnData::Bool(vec), Datum::Null) => vec.push(false),
-            (ColumnData::Bool(_), _) => unreachable!(),
-            (ColumnData::Float(vec), Datum::Float(f)) => vec.push(*f),
-            (ColumnData::Float(vec), Datum::Null) => vec.push(0.0),
-            (ColumnData::Float(_), _) => unreachable!(),
-            (ColumnData::String(str_buf, offsets), Datum::String(str)) => {
-                str_buf.push_str(str);
-                offsets.push(str_buf.len());
-            }
-            (ColumnData::String(str_buf, offsets), Datum::Null) => {
-                offsets.push(str_buf.len());
-            }
-            (ColumnData::String(_, _), _) => unreachable!(),
-            (ColumnData::Array(sizes), Datum::Array(arr)) => sizes.push(arr.len()),
-            (ColumnData::Array(sizes), Datum::Null) => sizes.push(0),
-            (ColumnData::Array(_), _) => unreachable!(),
-            (ColumnData::Object(sizes), Datum::Object(obj)) => sizes.push(obj.len()),
-            (ColumnData::Object(sizes), Datum::Null) => sizes.push(0),
-            (ColumnData::Object(_), _) => unreachable!(),
-            (ColumnData::Union(vec), Datum::Null) => vec.push(Union::Null),
-            (ColumnData::Union(_), Datum::Missing) => unreachable!(),
-            (ColumnData::Union(vec), Datum::Bool(b)) => vec.push(Union::Bool(*b)),
-            (ColumnData::Union(vec), Datum::Float(f)) => vec.push(Union::Float(*f)),
-            (ColumnData::Union(vec), Datum::String(s)) => vec.push(Union::String(s.clone())),
-            (ColumnData::Union(vec), Datum::Object(obj)) => vec.push(Union::Object(obj.len())),
-            (ColumnData::Union(vec), Datum::Array(arr)) => vec.push(Union::Array(arr.len())),
-        }
-    }
-
-    /// Up-casts the columnData to be of the type needed to accept the passed in datum
-    fn up_cast(&mut self, data_type: Type) {
-        match (&self.data, data_type) {
-            // Null data or union columns are like wildcards.
-            (_, Type::Missing) |
-            (_, Type::Null) |
-            (ColumnData::Union(_), _) => {}
-            // Column type matches, we're ok
-            (ColumnData::Float(_), Type::Float) |
-            (ColumnData::Array(_), Type::Array) |
-            (ColumnData::String(_, _), Type::String) |
-            (ColumnData::Object(_), Type::Object) |
-            (ColumnData::Bool(_), Type::Bool) => {}
-            // Column type is null, just upcast, padding with default values
-            (ColumnData::Null, Type::Bool) => {
-                let mut vec = BitVec::new();
-                vec.grow(self.null_map.len(), false);
-                self.data = ColumnData::Bool(vec);
-            }
-            (ColumnData::Null, Type::Float) => {
-                self.data = ColumnData::Float(vec![0.0;self.null_map.len()]);
-            }
-            (ColumnData::Null, Type::Object) => {
-                self.data = ColumnData::Object(vec![0;self.null_map.len()]);
-            }
-            (ColumnData::Null, Type::Array) => {
-                self.data = ColumnData::Array(vec![0;self.null_map.len()]);
-            }
-            (ColumnData::Null, Type::String) => {
-                self.data = ColumnData::String(String::new(),vec![0;self.null_map.len()]);
-            }
-            // Otherwise we have to convert to a union type
-            (_, _) => {
-                todo!()
-            }
-        }
-    }
-}
-
-/// The actual data inside one column
-#[derive(Debug)]
-pub enum ColumnData {
-    Null, // If the whole column is null and untyped.
-    Float(Vec<f64>),
-    Bool(BitVec),
-    String(String, Vec<usize>),
-    Object(Vec<usize>),
-    Array(Vec<usize>),
-    Union(Vec<Union>)
-}
-
-impl ColumnData {
-    pub fn is_null(&self) -> bool {
-        matches!(self, ColumnData::Null)
-    }
-}
-
-/// Very similar to a datum but Arrays and Objects only contain some metadata here.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Union {
-    Null,
-    Float(f64),
-    Bool(bool),
-    String(String),
-    Array(usize),
-    Object(usize)
 }

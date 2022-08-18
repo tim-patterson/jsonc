@@ -1,8 +1,8 @@
-use std::error::Error;
-use std::time::Instant;
 use jsonc::columnar::{ColumnData, PathComponent, Stripe};
 use jsonc::datum::Datum;
 use jsonc::loader::load_json;
+use std::error::Error;
+use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn Error>> {
     // https://datasets-documentation.s3.eu-west-3.amazonaws.com/kafka/github_all_columns.ndjson
@@ -21,8 +21,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let duration = start.elapsed();
     println!("Columnarised data in {duration:?}");
 
-    perf_test(average_review_comments_hand_rolled_row, "hand rolled row", &data);
-    perf_test(average_review_comments_hand_rolled_column, "hand rolled columnar", &columnar);
+    perf_test(
+        average_review_comments_hand_rolled_row,
+        "hand rolled row",
+        &data,
+    );
+    perf_test(
+        average_review_comments_hand_rolled_column,
+        "hand rolled columnar",
+        &columnar,
+    );
     //println!("{columnar:?}");
     Ok(())
 }
@@ -43,9 +51,11 @@ fn average_review_comments_hand_rolled_row(data: &[Datum]) -> f64 {
 
     for datum in data {
         if let Datum::Object(root) = datum {
-            if let Some(Datum::Float(number)) = root.get("review_comments") {
-                sum += *number;
-                count += 1;
+            if let Some(datum) = root.get("review_comments") {
+                if let Some(number) = datum.as_f64() {
+                    sum += number;
+                    count += 1;
+                }
             }
         }
     }
@@ -53,15 +63,22 @@ fn average_review_comments_hand_rolled_row(data: &[Datum]) -> f64 {
 }
 
 fn average_review_comments_hand_rolled_column(stripe: &Stripe) -> f64 {
+    let path = vec![PathComponent::Key("review_comments".to_string())];
     let mut sum = 0.0;
     let mut count = 0_u64;
-
-    let path = vec![PathComponent::Key("review_comments".to_string())];
     if let Some(column) = stripe.get_column(&path) {
         if let ColumnData::Float(vec) = &column.data {
-            for (idx, number) in vec.iter().enumerate() {
-                if !column.null_map[idx] {
+            for (number, null) in vec.iter().zip(column.null_map.iter()) {
+                if !null {
                     sum += *number;
+                    count += 1;
+                }
+            }
+        }
+        if let ColumnData::SmallInt(vec) = &column.data {
+            for (number, null) in vec.iter().zip(column.null_map.iter()) {
+                if !null {
+                    sum += *number as f64;
                     count += 1;
                 }
             }
